@@ -1,5 +1,6 @@
 from flask import Flask, Response, send_from_directory, request, jsonify
 import json
+import logging
 import os
 import time
 import threading
@@ -110,55 +111,54 @@ class GenerationSession():
         except Exception as exception:
             print_exception(exception)
 
-class WebServer():
-    def __init__(self, model: Model, port=8000):
-        static_path = os.path.abspath("./static")
-        self.app = Flask(__name__, static_folder=static_path)
+def web_server_worker(model: Model, port=8000):
+    static_path = os.path.abspath("./static")
+    app = Flask(__name__, static_folder=static_path)
+    logging.getLogger('werkzeug').disabled = True
 
-        @self.app.route("/<path:filename>")
-        def serve_static(filename):
-            return send_from_directory(static_path, filename)
-        
-        @self.app.route("/generate", methods=["POST"])
-        def generate():
-            if request.method == 'POST':
-                prompt = request.json["prompt"]
-                if not prompt or prompt == None or prompt == "":
-                    return jsonify({"successful": False})
-                
-                try:
-                    session = GenerationSession(model, prompt)
+    @app.route("/<path:filename>")
+    def serve_static(filename):
+        return send_from_directory(static_path, filename)
+    
+    @app.route("/generate", methods=["POST"])
+    def generate():
+        if request.method == 'POST':
+            prompt = request.json["prompt"]
+            if not prompt or prompt == None or prompt == "":
+                return jsonify({"successful": False})
+            
+            try:
+                session = GenerationSession(model, prompt)
 
-                    def generate_async():
-                        session.generate_recursively(40, 5)  
-                
-                    generation_thread = threading.Thread(target=generate_async, daemon=True)
-                    generation_thread.start()
+                def generate_async():
+                    session.generate_recursively(40, 5)  
+            
+                generation_thread = threading.Thread(target=generate_async, daemon=True)
+                generation_thread.start()
 
-                    return jsonify({"successful": True})
-                except Exception as exception:
-                    print_exception(exception)
-                    return jsonify({"successful": False})
+                return jsonify({"successful": True})
+            except Exception as exception:
+                print_exception(exception)
+                return jsonify({"successful": False})
 
-        @self.app.route("/updates")
-        def sse():
-            def event_stream():
-                tokens: List[str] = []
-                TokenEventSystem.subscribe(tokens.extend)
-                while True:
-                    if len(tokens) > 0:
-                        tokens_to_send = []
-                        tokens_to_send.extend(tokens)
-                        tokens.clear()
-                        yield f"data: {json.dumps({'tokens': tokens_to_send})}\n\n"
-                    else:
-                        time.sleep(0.1)
+    @app.route("/updates")
+    def sse():
+        def event_stream():
+            tokens: List[str] = []
+            TokenEventSystem.subscribe(tokens.extend)
+            while True:
+                if len(tokens) > 0:
+                    tokens_to_send = []
+                    tokens_to_send.extend(tokens)
+                    tokens.clear()
+                    yield f"data: {json.dumps({'tokens': tokens_to_send})}\n\n"
+                else:
+                    time.sleep(0.1)
 
-            return Response(event_stream(), content_type="text/event-stream")
-        
-        self.app.run("", port, debug=True, threaded=True)
-        print(f"[+] HTTP server is up ( http://localhost:{port}/index.html )")
-
+        return Response(event_stream(), content_type="text/event-stream")
+    
+    print(f"[+] HTTP server is up ( http://localhost:{port}/index.html )")
+    app.run("", port, threaded=True)
 
 if __name__ == "__main__":
     models_path = os.path.abspath("./models")
@@ -171,6 +171,8 @@ if __name__ == "__main__":
 
     model = Model()
     TokenEventSystem.create_worker()
-    web_server = WebServer(model, 8000)
-
     TokenEventSystem.subscribe(print_tokens)
+
+    web_server_worker(model, 8000)
+
+    
