@@ -4,7 +4,11 @@ import os
 import time
 import threading
 import torch
-from typing import Callable, List
+from typing import Callable, List, Optional
+
+def print_exception(exception: Exception):
+    raise exception
+
 
 def print_tokens(tokens: list[str]):
     for token in tokens:
@@ -64,20 +68,20 @@ class GenerationSession():
 
         return torch.tensor(attention_mask_array)
     
-    def append_delta(self, generated_tensor: torch.Tensor, generated_tokens: int) -> torch.Tensor:
+    def append_delta(self, generated_tensor: torch.Tensor, token_count: int) -> torch.Tensor:
         generated_tokens = []
-        for i in range(generated_tokens):
-            generated_tokens.append(generated_tensor[0, -(generated_tokens - i)]) 
+        for i in range(token_count):
+            generated_tokens.append(generated_tensor[0, -(token_count - i)]) 
         delta_tensor = torch.tensor([generated_tokens]) 
-        self.output_tensor = torch.cat((self.output_tensor, delta_tensor))
+        self.output_tensor = torch.cat((self.output_tensor, delta_tensor), dim=1)
         return delta_tensor
     
-    def generate_tokens(self, tokens: int) -> list[str] | None:
+    def generate_tokens(self, token_count: int) -> Optional[List[str]]:
         attention_mask = self.get_attention_mask()
 
         generated_tensor = self.model.model.generate(
             self.output_tensor,
-            max_length = self.output_tensor.shape[1] + tokens,
+            max_length = self.output_tensor.shape[1] + token_count,
             num_return_sequences = 1, 
             no_repeat_ngram_size = 2,
             top_p = 0.92,
@@ -87,21 +91,24 @@ class GenerationSession():
             attention_mask=attention_mask
         )
 
-        delta_tensor = self.append_delta(generated_tensor, tokens)
+        delta_tensor = self.append_delta(generated_tensor, token_count)
 
         tokens: list[str] = []
 
-        for i in delta_tensor[0]:
+        for i in range(len(delta_tensor[0])):
             tokens.append(self.model.tokenizer.decode(delta_tensor[0, i], skip_special_tokens=True))
 
         return tokens
     
     def generate_recursively(self, rounds: int, tokens_per_round: int):
-        for _ in range(rounds):
-            tokens = self.generate_tokens(self.model, tokens_per_round)
-            if(tokens == None):
-                break
-        TokenEventSystem.add_tokens(tokens)
+        try:
+            for _ in range(rounds):
+                tokens = self.generate_tokens(tokens_per_round)
+                if(tokens == None):
+                    break
+            TokenEventSystem.add_tokens(tokens)
+        except Exception as exception:
+            print_exception(exception)
 
 class WebServer():
     def __init__(self, model: Model, port=8000):
@@ -119,16 +126,20 @@ class WebServer():
                 if not prompt or prompt == None or prompt == "":
                     return jsonify({"successful": False})
                 
-                session = GenerationSession(model, prompt)
+                try:
+                    session = GenerationSession(model, prompt)
 
-                def generate_async():
-                    session.generate_recursively(40, 5)  
-            
-                generation_thread = threading.Thread(target=generate_async, daemon=True)
-                generation_thread.start()
+                    def generate_async():
+                        session.generate_recursively(40, 5)  
+                
+                    generation_thread = threading.Thread(target=generate_async, daemon=True)
+                    generation_thread.start()
 
-                return jsonify({"successful": True})
-        
+                    return jsonify({"successful": True})
+                except Exception as exception:
+                    print_exception(exception)
+                    return jsonify({"successful": False})
+
         @self.app.route("/updates")
         def sse():
             def event_stream():
@@ -146,8 +157,8 @@ class WebServer():
             return Response(event_stream(), content_type="text/event-stream")
         
         self.app.run("", port, debug=True, threaded=True)
-        print(f"[+] HTTP server is up ( http://localhost:{port}/ )")
-        
+        print(f"[+] HTTP server is up ( http://localhost:{port}/index.html )")
+
 
 if __name__ == "__main__":
     models_path = os.path.abspath("./models")

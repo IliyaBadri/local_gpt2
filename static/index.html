@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Token Generator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        #output {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap; /* Preserve whitespace */
+        }
+        #prompt {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        #generate-btn {
+            padding: 10px 15px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Token Generator</h1>
+    <textarea id="prompt" rows="4" placeholder="Enter your prompt here..."></textarea>
+    <button id="generate-btn">Generate Tokens</button>
+    <h2>Output:</h2>
+    <div id="output"></div>
+
+    <script>
+        const outputDiv = document.getElementById('output');
+        const promptInput = document.getElementById('prompt');
+        const generateBtn = document.getElementById('generate-btn');
+
+        // Function to send the prompt to the server
+        async function generateTokens() {
+            const prompt = promptInput.value;
+            if (!prompt) {
+                alert('Please enter a prompt.');
+                return;
+            }
+
+            // Send a POST request to the /generate endpoint
+            const response = await fetch('/generate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ prompt })
+            });
+
+            const data = await response.json();
+            if (!data.successful) {
+                alert('Failed to generate tokens. Please check the console for more details.');
+            } else {
+                outputDiv.innerHTML = ''; // Clear the output on new request
+                startListeningForUpdates(); // Start listening for updates
+            }
+        }
+
+        // Function to listen for updates from the server
+        function startListeningForUpdates() {
+            const eventSource = new EventSource('/updates');
+
+            eventSource.onmessage = function(event) {
+                const tokens = JSON.parse(event.data).tokens;
+                if (tokens.length > 0) {
+                    outputDiv.innerHTML += tokens.join(' ') + ' '; // Append new tokens
+                    outputDiv.scrollTop = outputDiv.scrollHeight; // Scroll to bottom
+                }
+            };
+
+            eventSource.onerror = function() {
+                console.error('EventSource failed.');
+                eventSource.close(); // Close the connection on error
+            };
+        }
+
+        // Attach the click event to the button
+        generateBtn.addEventListener('click', generateTokens);
+    </script>
+</body>
+</html>
