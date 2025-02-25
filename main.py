@@ -27,11 +27,12 @@ class TokenEventSystem():
     def create_worker():
         def worker():
             while True:
-                if(len(TokenEventSystem.token_queue) <= 0):
-                    continue
-                for subscriber in TokenEventSystem.subscribers:
-                    subscriber(TokenEventSystem.token_queue)
-                TokenEventSystem.token_queue.clear()
+                if(len(TokenEventSystem.token_queue) > 0):
+                    for subscriber in TokenEventSystem.subscribers:
+                        subscriber(TokenEventSystem.token_queue)
+                    TokenEventSystem.token_queue.clear()
+                else:
+                    time.sleep(0.1)
 
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
@@ -135,12 +136,10 @@ class WebServer():
                 TokenEventSystem.subscribe(tokens.extend)
                 while True:
                     if len(tokens) > 0:
-                        tokens_tobe_sent = []
-                        tokens_tobe_sent.extend(tokens)
+                        tokens_to_send = []
+                        tokens_to_send.extend(tokens)
                         tokens.clear()
-                        yield jsonify({
-                            "tokens": tokens_tobe_sent
-                        })
+                        yield f"data: {json.dumps({'tokens': tokens_to_send})}\n\n"
                     else:
                         time.sleep(0.1)
 
@@ -152,9 +151,7 @@ class WebServer():
 
 if __name__ == "__main__":
     models_path = os.path.abspath("./models")
-
-    if not os.path.exists(models_path):
-        os.makedirs(models_path)
+    os.makedirs(models_path, exist_ok=True)
 
     os.environ["HF_HOME"] = models_path
     os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
