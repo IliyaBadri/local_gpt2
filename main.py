@@ -1,11 +1,14 @@
-from flask import Flask, Response, send_from_directory, request, jsonify
+import asyncio
 import json
 import logging
+from multiprocessing import Process
 import os
 import random
 import time
-import threading
 import torch
+import http.server
+import socketserver
+import websockets
 from typing import Callable, List, Optional
 
 def print_exception(exception: Exception):
@@ -21,13 +24,13 @@ def generate_unique_id() -> str:
     unique_id = f"{timestamp}{random_digits}"
     return unique_id
 
-
-
 class Model():
+    global_model = None
     def __init__(self):
         self.model_name = "openai-community/gpt2"
         self.model: GPT2LMHeadModel = GPT2LMHeadModel.from_pretrained(self.model_name)
         self.tokenizer: GPT2Tokenizer = GPT2Tokenizer.from_pretrained(self.model_name)
+        global_model = self
 
     @staticmethod
     def get_subtensor_from_end(tensor: torch.Tensor, token_count: int) -> torch.Tensor:
@@ -89,8 +92,6 @@ class Model():
 
         return tokens
 
-    
-
 class TokenList():
     def __init__(self, tokens: List[str], prompt_id: str):
         self.id = prompt_id,
@@ -110,6 +111,7 @@ class Prompt():
                 if(tokens == None):
                     break
                 token_list = TokenList(tokens, self.id)
+                print_tokens(token_list.tokens) #remove for production
                 Pools.add_token_list(token_list)
         except Exception as exception:
             print_exception(exception)
@@ -122,15 +124,97 @@ class Pools():
     def add_prompt(prompt: Prompt):
         Pools.prompts.append(prompt)
 
+    @staticmethod
     def add_token_list(token_list: TokenList):
         Pools.token_lists.append(token_list)
 
-def web_server_worker(model: Model, port=8000):
-    static_path = os.path.abspath("./static")
-    app = Flask(__name__, static_folder=static_path)
-    logging.getLogger('werkzeug').disabled = True
-    print(f"[+] HTTP server is up ( http://localhost:{port}/index.html )")
-    app.run("", port, threaded=True)
+    @staticmethod
+    def pull_prompt() -> Optional[Prompt]:
+        if len(Pools.prompts) <= 0:
+            return None
+        return Pools.prompts.pop(0)
+    
+    @staticmethod
+    def pull_token_list() -> Optional[TokenList]:
+        if len(Pools.token_lists) <= 0:
+            return None
+        return Pools.token_lists.pop(0)
+
+class StaticServerHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        static_path = os.path.abspath("./static")
+        if self.path == "/":
+            self.path = os.path.join(static_path, "index.html")
+        return super().do_GET()
+    
+def start_static_server(port=8000):
+    with socketserver.TCPServer(("", port), StaticServerHandler) as httpd:
+        print(f"[+] Web GUI is up at port http://localhost:{port}/")
+        httpd.serve_forever()
+
+async def start_token_generator():
+    while True:
+        prompt = Pools.pull_prompt()
+        if prompt == None:
+            await asyncio.sleep(0.1)
+            continue
+
+        prompt.generate_recursively(10, 5)
+
+async def handle_websocket_messages(websocket):
+    while True:
+        message = await websocket.recv()
+        try:
+            data = json.loads(message)
+            prompt_string = data.get("prompt")
+            if not (type(prompt_string) == type(str)):
+                print("[-] Invalid JSON received")
+                continue
+            
+            if(Model.global_model == None):
+                continue
+
+            prompt = Prompt(Model.global_model, prompt)
+
+            Pools.add_prompt(prompt)
+
+        except json.JSONDecodeError:
+            print("[-] Invalid JSON received")
+
+        await asyncio.sleep(0.1)
+
+
+async def websocket_handler(websocket, path):
+    print(f"[+] New WebSocket connection: {websocket.remote_address}")
+    try:
+        token_sender_task = asyncio.create_task(handle_websocket_messages(websocket))
+        while True:
+            token_list = Pools.pull_token_list()
+            if token_list == None:
+                await asyncio.sleep(0.1)
+                continue
+            response = {
+                "prompt_id": token_list.id,
+                "tokens": token_list.tokens
+            }
+            await websocket.send(json.dumps(response))
+            await asyncio.sleep(0.1)
+    except websockets.exceptions.ConnectionClosed as e:
+        print(f"[-] Websocket connection closed: {e}")
+
+    finally:
+        token_sender_task.cancel()
+
+async def start_websocket_server(port=8001):
+    server = await websockets.serve(websocket_handler, "localhost", port)
+    print(f"[+] WebSocket server started at ws://localhost:{port}")
+    await server.wait_closed()
+
+async def main_asyncio_coroutine():
+    token_generator_task = asyncio.create_task(start_token_generator())
+    websocket_server_task = asyncio.create_task(start_websocket_server())
+
+    await asyncio.gather(token_generator_task, websocket_server_task)
 
 if __name__ == "__main__":
     models_path = os.path.abspath("./models")
@@ -141,9 +225,16 @@ if __name__ == "__main__":
 
     from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
+    print("[+] Loading model . . .")
     model = Model()
+    print(f"[+] The {model.model_name} model has been loaded.")
 
-    web_server_worker(model, 8000)
+    static_server_process = Process(target=start_static_server)
+    static_server_process.start()
+
+    asyncio.run(main_asyncio_coroutine())
+
+    
 
 
 
