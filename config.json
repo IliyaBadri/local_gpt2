@@ -1,0 +1,4 @@
+{
+    "static_port": 8000,
+    "websocket_port": 8001
+}
