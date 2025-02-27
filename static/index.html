@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Token Generator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        #output {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap; /* Preserve whitespace */
+        }
+        #prompt {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        #generate-btn {
+            padding: 10px 15px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Token Generator</h1>
+    <textarea id="prompt" rows="4" placeholder="Enter your prompt here..."></textarea>
+    <button id="generate-btn">Generate Tokens</button>
+    <h2>Output:</h2>
+    <div id="output"></div>
+
+    <script>
+        const outputDiv = document.getElementById("output");
+        const promptInput = document.getElementById("prompt");
+        const generateBtn = document.getElementById("generate-btn");
+        let socket = new WebSocket("ws://localhost:8001/");
+
+        socket.onmessage = function(event) {
+            const tokens = JSON.parse(event.data).tokens;
+            if (tokens.length > 0) {
+                outputDiv.innerHTML += tokens.join('') ;
+                outputDiv.scrollTop = outputDiv.scrollHeight;
+            }
+        };
+
+        function generateTokens() {
+            const prompt = promptInput.value;
+            if (!prompt) {
+                alert('Please enter a prompt.');
+                return;
+            }
+
+            socket.send(JSON.stringify({ "prompt": prompt }));
+        }
+
+        generateBtn.addEventListener('click', generateTokens);
+    </script>
+</body>
+</html>
