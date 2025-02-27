@@ -180,10 +180,16 @@ async def websocket_connection_handler(websocket, asyncio_shutdown_event: asynci
                 print("[-] Invalid JSON received")
         await asyncio.sleep(0.1)
     except websockets.exceptions.ConnectionClosed as e:
-        Pools.websocket_list.remove(websocket)
+        try:
+            Pools.websocket_list.remove(websocket)
+        except:
+            pass
         print(f"[-] Websocket connection closed: {e}")
     finally:
-        Pools.websocket_list.remove(websocket)
+        try:
+            Pools.websocket_list.remove(websocket)
+        except:
+            pass
 
 async def start_websocket_token_sender(asyncio_shutdown_event: asyncio.Event):
     while not asyncio_shutdown_event.is_set():
@@ -196,7 +202,10 @@ async def start_websocket_token_sender(asyncio_shutdown_event: asyncio.Event):
                 "prompt_id": token_list.id,
                 "tokens": token_list.tokens
             }
-            await websocket.send(json.dumps(response))
+            try:
+                await websocket.send(json.dumps(response))
+            except:
+                pass
         await asyncio.sleep(0.1)
 
 async def start_websocket_server(port: int, asyncio_shutdown_event: asyncio.Event):
