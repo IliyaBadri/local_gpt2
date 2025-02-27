@@ -30,7 +30,7 @@ class Model():
         self.model_name = "openai-community/gpt2"
         self.model: GPT2LMHeadModel = GPT2LMHeadModel.from_pretrained(self.model_name)
         self.tokenizer: GPT2Tokenizer = GPT2Tokenizer.from_pretrained(self.model_name)
-        global_model = self
+        Model.global_model = self
 
     @staticmethod
     def get_subtensor_from_end(tensor: torch.Tensor, token_count: int) -> torch.Tensor:
@@ -65,14 +65,14 @@ class Model():
         
         return tokens
     
-    def generate_tokens(self, output_tensor: torch.Tensor, token_count: int) -> Optional[list[str]]:
+    def generate_tokens(self, output_tensor: torch.Tensor, token_count: int) -> tuple[Optional[list[str]], Optional[torch.Tensor]]:
         if len(output_tensor[0]) > 0:
             if output_tensor [0, -1] == self.tokenizer.eos_token_id:
-                return None
+                return None, None
         
         attention_mask = self.get_attention_mask(output_tensor)
 
-        generated_tensor = self.model.model.generate(
+        generated_tensor = self.model.generate(
             output_tensor,
             max_length = output_tensor.shape[1] + token_count,
             num_return_sequences = 1, 
@@ -86,11 +86,9 @@ class Model():
 
         new_tokens_tensor = Model.get_subtensor_from_end(generated_tensor, token_count)
 
-        output_tensor[:] = torch.cat((output_tensor, new_tokens_tensor), dim=1)
-
         tokens = self.decode_tokens_tensor(new_tokens_tensor)
 
-        return tokens
+        return tokens, new_tokens_tensor
 
 class TokenList():
     def __init__(self, tokens: List[str], prompt_id: str):
@@ -107,9 +105,10 @@ class Prompt():
     def generate_recursively(self, rounds: int, tokens_per_round: int):
         try:
             for _ in range(rounds):
-                tokens = self.model.generate_tokens(self.output_tensor, tokens_per_round)
-                if(tokens == None):
+                tokens, new_tokens_tensor = self.model.generate_tokens(self.output_tensor, tokens_per_round)
+                if tokens == None or new_tokens_tensor == None:
                     break
+                self.output_tensor = torch.cat((self.output_tensor, new_tokens_tensor), dim=1)
                 token_list = TokenList(tokens, self.id)
                 print_tokens(token_list.tokens) #remove for production
                 Pools.add_token_list(token_list)
@@ -144,7 +143,7 @@ class StaticServerHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         static_path = os.path.abspath("./static")
         if self.path == "/":
-            self.path = os.path.join(static_path, "index.html")
+            self.path = "/static/index.html"
         return super().do_GET()
     
 def start_static_server(port=8000):
@@ -166,15 +165,18 @@ async def handle_websocket_messages(websocket):
         message = await websocket.recv()
         try:
             data = json.loads(message)
-            prompt_string = data.get("prompt")
-            if not (type(prompt_string) == type(str)):
+            prompt_string = data["prompt"]
+
+            if(type(prompt_string) != str):
                 print("[-] Invalid JSON received")
                 continue
             
             if(Model.global_model == None):
                 continue
 
-            prompt = Prompt(Model.global_model, prompt)
+            prompt = Prompt(Model.global_model, prompt_string)
+
+            print(f"[+] A new prompt has been added to the pool. ( prompt id: {prompt.id} )")
 
             Pools.add_prompt(prompt)
 
@@ -184,7 +186,7 @@ async def handle_websocket_messages(websocket):
         await asyncio.sleep(0.1)
 
 
-async def websocket_handler(websocket, path):
+async def websocket_handler(websocket):
     print(f"[+] New WebSocket connection: {websocket.remote_address}")
     try:
         token_sender_task = asyncio.create_task(handle_websocket_messages(websocket))

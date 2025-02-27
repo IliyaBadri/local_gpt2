@@ -4,3 +4,4 @@ Lib
 Include
 share
 models
+__pycache__
